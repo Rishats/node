@@ -903,7 +903,6 @@ bool HInstruction::CanDeoptimize() {
       return true;
   }
   UNREACHABLE();
-  return true;
 }
 
 
@@ -1151,7 +1150,6 @@ const char* HUnaryMathOperation::OpName() const {
       return "clz32";
     default:
       UNREACHABLE();
-      return NULL;
   }
 }
 
@@ -1650,7 +1648,6 @@ const char* HCheckInstanceType::GetCheckName() const {
     case IS_INTERNALIZED_STRING: return "internalized_string";
   }
   UNREACHABLE();
-  return "";
 }
 
 
@@ -2131,13 +2128,6 @@ std::ostream& HCapturedObject::PrintDataTo(std::ostream& os) const {  // NOLINT
 }
 
 
-void HEnterInlined::RegisterReturnTarget(HBasicBlock* return_target,
-                                         Zone* zone) {
-  DCHECK(return_target->IsInlineReturnTarget());
-  return_targets_.Add(return_target, zone);
-}
-
-
 std::ostream& HEnterInlined::PrintDataTo(std::ostream& os) const {  // NOLINT
   os << function()->debug_name()->ToCString().get();
   if (syntactic_tail_call_mode() == TailCallMode::kAllow) {
@@ -2401,10 +2391,6 @@ bool HConstant::ImmortalImmovable() const {
 
 bool HConstant::EmitAtUses() {
   DCHECK(IsLinked());
-  if (block()->graph()->has_osr() &&
-      block()->graph()->IsStandardConstant(this)) {
-    return true;
-  }
   if (HasNoUses()) return true;
   if (IsCell()) return false;
   if (representation().IsDouble()) return false;
@@ -3717,7 +3703,13 @@ void HPhi::SimplifyConstantInputs() {
       SetOperandAt(i, operand->BooleanValue() ? graph->GetConstant1()
                                               : graph->GetConstant0());
     } else if (operand->ImmortalImmovable()) {
-      SetOperandAt(i, graph->GetConstant0());
+      if (operand->HasStringValue() &&
+          operand->EqualsUnique(
+              Unique<String>(isolate()->factory()->one_string()))) {
+        SetOperandAt(i, graph->GetConstant1());
+      } else {
+        SetOperandAt(i, graph->GetConstant0());
+      }
     }
   }
   // Overwrite observed input representations because they are likely Tagged.

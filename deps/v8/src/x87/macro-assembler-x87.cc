@@ -340,7 +340,7 @@ void MacroAssembler::RecordWriteField(
   lea(dst, FieldOperand(object, offset));
   if (emit_debug_code()) {
     Label ok;
-    test_b(dst, Immediate((1 << kPointerSizeLog2) - 1));
+    test_b(dst, Immediate(kPointerSize - 1));
     j(zero, &ok, Label::kNear);
     int3();
     bind(&ok);
@@ -370,7 +370,7 @@ void MacroAssembler::RecordWriteForMap(Register object, Handle<Map> map,
   if (emit_debug_code()) {
     Label ok;
     lea(address, FieldOperand(object, HeapObject::kMapOffset));
-    test_b(address, Immediate((1 << kPointerSizeLog2) - 1));
+    test_b(address, Immediate(kPointerSize - 1));
     j(zero, &ok, Label::kNear);
     int3();
     bind(&ok);
@@ -1792,7 +1792,6 @@ void MacroAssembler::InvokeFunction(Register fun, Register new_target,
   mov(ebx, FieldOperand(edi, JSFunction::kSharedFunctionInfoOffset));
   mov(esi, FieldOperand(edi, JSFunction::kContextOffset));
   mov(ebx, FieldOperand(ebx, SharedFunctionInfo::kFormalParameterCountOffset));
-  SmiUntag(ebx);
 
   ParameterCount expected(ebx);
   InvokeFunctionCode(edi, new_target, expected, actual, flag, call_wrapper);

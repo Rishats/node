@@ -11,7 +11,6 @@
 #include "src/code-factory.h"
 #include "src/code-stubs.h"
 #include "src/crankshaft/arm64/lithium-gap-resolver-arm64.h"
-#include "src/crankshaft/hydrogen-osr.h"
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
 #include "src/objects-inl.h"
@@ -179,9 +178,9 @@ class TestAndBranch : public BranchGenerator {
 // Test the input and branch if it is non-zero and not a NaN.
 class BranchIfNonZeroNumber : public BranchGenerator {
  public:
-  BranchIfNonZeroNumber(LCodeGen* codegen, const FPRegister& value,
-                        const FPRegister& scratch)
-    : BranchGenerator(codegen), value_(value), scratch_(scratch) { }
+  BranchIfNonZeroNumber(LCodeGen* codegen, const VRegister& value,
+                        const VRegister& scratch)
+      : BranchGenerator(codegen), value_(value), scratch_(scratch) {}
 
   virtual void Emit(Label* label) const {
     __ Fabs(scratch_, value_);
@@ -198,8 +197,8 @@ class BranchIfNonZeroNumber : public BranchGenerator {
   }
 
  private:
-  const FPRegister& value_;
-  const FPRegister& scratch_;
+  const VRegister& value_;
+  const VRegister& scratch_;
 };
 
 
@@ -375,8 +374,7 @@ void LCodeGen::CallCodeGeneric(Handle<Code> code,
   __ Call(code, mode);
   RecordSafepointWithLazyDeopt(instr, safepoint_mode);
 
-  if ((code->kind() == Code::BINARY_OP_IC) ||
-      (code->kind() == Code::COMPARE_IC)) {
+  if ((code->kind() == Code::COMPARE_IC)) {
     // Signal that we don't inline smi code before these stubs in the
     // optimizing code generator.
     InlineSmiCheckInfo::EmitNotInlined(masm());
@@ -393,10 +391,9 @@ void LCodeGen::DoCallNewArray(LCallNewArray* instr) {
   __ Mov(x2, instr->hydrogen()->site());
 
   ElementsKind kind = instr->hydrogen()->elements_kind();
-  AllocationSiteOverrideMode override_mode =
-      (AllocationSite::GetMode(kind) == TRACK_ALLOCATION_SITE)
-          ? DISABLE_ALLOCATION_SITES
-          : DONT_OVERRIDE;
+  AllocationSiteOverrideMode override_mode = AllocationSite::ShouldTrack(kind)
+                                                 ? DISABLE_ALLOCATION_SITES
+                                                 : DONT_OVERRIDE;
 
   if (instr->arity() == 0) {
     ArrayNoArgumentConstructorStub stub(isolate(), kind, override_mode);
@@ -547,7 +544,7 @@ void LCodeGen::SaveCallerDoubles() {
   while (!iterator.Done()) {
     // TODO(all): Is this supposed to save just the callee-saved doubles? It
     // looks like it's saving all of them.
-    FPRegister value = FPRegister::from_code(iterator.Current());
+    VRegister value = VRegister::from_code(iterator.Current());
     __ Poke(value, count * kDoubleSize);
     iterator.Advance();
     count++;
@@ -565,7 +562,7 @@ void LCodeGen::RestoreCallerDoubles() {
   while (!iterator.Done()) {
     // TODO(all): Is this supposed to restore just the callee-saved doubles? It
     // looks like it's restoring all of them.
-    FPRegister value = FPRegister::from_code(iterator.Current());
+    VRegister value = VRegister::from_code(iterator.Current());
     __ Peek(value, count * kDoubleSize);
     iterator.Advance();
     count++;
@@ -675,21 +672,7 @@ void LCodeGen::DoPrologue(LPrologue* instr) {
   Comment(";;; Prologue end");
 }
 
-
-void LCodeGen::GenerateOsrPrologue() {
-  // Generate the OSR entry prologue at the first unknown OSR value, or if there
-  // are none, at the OSR entrypoint instruction.
-  if (osr_pc_offset_ >= 0) return;
-
-  osr_pc_offset_ = masm()->pc_offset();
-
-  // Adjust the frame size, subsuming the unoptimized frame into the
-  // optimized frame.
-  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
-  DCHECK(slots >= 0);
-  __ Claim(slots);
-}
-
+void LCodeGen::GenerateOsrPrologue() { UNREACHABLE(); }
 
 void LCodeGen::GenerateBodyInstructionPre(LInstruction* instr) {
   if (instr->IsCall()) {
@@ -1078,7 +1061,6 @@ Operand LCodeGen::ToOperand(LOperand* op) {
   }
   // Stack slots not implemented, use ToMemOperand instead.
   UNREACHABLE();
-  return Operand(0);
 }
 
 
@@ -1099,7 +1081,6 @@ Operand LCodeGen::ToOperand32(LOperand* op) {
   }
   // Other cases are not implemented.
   UNREACHABLE();
-  return Operand(0);
 }
 
 
@@ -1135,7 +1116,7 @@ MemOperand LCodeGen::ToMemOperand(LOperand* op, StackMode stack_mode) const {
           (pushed_arguments_ + GetTotalFrameSlotCount()) * kPointerSize -
           StandardFrameConstants::kFixedFrameSizeAboveFp;
       int jssp_offset = fp_offset + jssp_offset_to_fp;
-      if (masm()->IsImmLSScaled(jssp_offset, LSDoubleWord)) {
+      if (masm()->IsImmLSScaled(jssp_offset, kPointerSizeLog2)) {
         return MemOperand(masm()->StackPointer(), jssp_offset);
       }
     }
@@ -1274,11 +1255,10 @@ void LCodeGen::EmitTestAndBranch(InstrType instr,
   EmitBranchGeneric(instr, branch);
 }
 
-
-template<class InstrType>
+template <class InstrType>
 void LCodeGen::EmitBranchIfNonZeroNumber(InstrType instr,
-                                         const FPRegister& value,
-                                         const FPRegister& scratch) {
+                                         const VRegister& value,
+                                         const VRegister& scratch) {
   BranchIfNonZeroNumber branch(this, value, scratch);
   EmitBranchGeneric(instr, branch);
 }
@@ -1689,8 +1669,7 @@ void LCodeGen::DoArithmeticT(LArithmeticT* instr) {
   DCHECK(ToRegister(instr->right()).is(x0));
   DCHECK(ToRegister(instr->result()).is(x0));
 
-  Handle<Code> code = CodeFactory::BinaryOpIC(isolate(), instr->op()).code();
-  CallCode(code, RelocInfo::CODE_TARGET, instr);
+  UNREACHABLE();
 }
 
 
@@ -1982,7 +1961,7 @@ void LCodeGen::DoCallWithDescriptor(LCallWithDescriptor* instr) {
       // TODO(all): on ARM we use a call descriptor to specify a storage mode
       // but on ARM64 we only have one storage mode so it isn't necessary. Check
       // this understanding is correct.
-      __ Call(code, RelocInfo::CODE_TARGET, TypeFeedbackId::None());
+      __ Call(code, RelocInfo::CODE_TARGET);
     } else {
       DCHECK(instr->target()->IsRegister());
       Register target = ToRegister(instr->target());
@@ -2279,7 +2258,7 @@ void LCodeGen::DoClassOfTestAndBranch(LClassOfTestAndBranch* instr) {
 
 void LCodeGen::DoCmpHoleAndBranchD(LCmpHoleAndBranchD* instr) {
   DCHECK(instr->hydrogen()->representation().IsDouble());
-  FPRegister object = ToDoubleRegister(instr->object());
+  VRegister object = ToDoubleRegister(instr->object());
   Register temp = ToRegister(instr->temp());
 
   // If we don't have a NaN, we don't have the hole, so branch now to avoid the
@@ -2667,7 +2646,8 @@ void LCodeGen::DoForInCacheArray(LForInCacheArray* instr) {
 
   __ Bind(&load_cache);
   __ LoadInstanceDescriptors(map, result);
-  __ Ldr(result, FieldMemOperand(result, DescriptorArray::kEnumCacheOffset));
+  __ Ldr(result,
+         FieldMemOperand(result, DescriptorArray::kEnumCacheBridgeOffset));
   __ Ldr(result, FieldMemOperand(result, FixedArray::SizeFor(instr->idx())));
   DeoptimizeIfZero(result, instr, DeoptimizeReason::kNoCache);
 
@@ -2735,7 +2715,6 @@ static Condition BranchCondition(HHasInstanceTypeAndBranch* instr) {
   if (to == LAST_TYPE) return hs;
   if (from == FIRST_TYPE) return ls;
   UNREACHABLE();
-  return eq;
 }
 
 
@@ -3276,7 +3255,7 @@ void LCodeGen::DoLoadNamedField(LLoadNamedField* instr) {
 
   if (instr->hydrogen()->representation().IsDouble()) {
     DCHECK(access.IsInobject());
-    FPRegister result = ToDoubleRegister(instr->result());
+    VRegister result = ToDoubleRegister(instr->result());
     __ Ldr(result, FieldMemOperand(object, offset));
     return;
   }
@@ -3436,7 +3415,7 @@ void LCodeGen::DoMathAbsTagged(LMathAbsTagged* instr) {
 
   // The result is the magnitude (abs) of the smallest value a smi can
   // represent, encoded as a double.
-  __ Mov(result_bits, double_to_rawbits(0x80000000));
+  __ Mov(result_bits, bit_cast<uint64_t>(static_cast<double>(0x80000000)));
   __ B(deferred->allocation_entry());
 
   __ Bind(deferred->exit());
@@ -4978,7 +4957,7 @@ void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
     DCHECK(access.IsInobject());
     DCHECK(!instr->hydrogen()->has_transition());
     DCHECK(!instr->hydrogen()->NeedsWriteBarrier());
-    FPRegister value = ToDoubleRegister(instr->value());
+    VRegister value = ToDoubleRegister(instr->value());
     __ Str(value, FieldMemOperand(object, offset));
     return;
   }
@@ -5016,7 +4995,7 @@ void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
 
   if (FLAG_unbox_double_fields && representation.IsDouble()) {
     DCHECK(access.IsInobject());
-    FPRegister value = ToDoubleRegister(instr->value());
+    VRegister value = ToDoubleRegister(instr->value());
     __ Str(value, FieldMemOperand(object, offset));
   } else if (representation.IsSmi() &&
              instr->hydrogen()->value()->representation().IsInteger32()) {
@@ -5354,7 +5333,7 @@ void LCodeGen::DoTypeof(LTypeof* instr) {
   __ Mov(x0, Immediate(isolate()->factory()->number_string()));
   __ B(&end);
   __ Bind(&do_call);
-  Callable callable = CodeFactory::Typeof(isolate());
+  Callable callable = Builtins::CallableFor(isolate(), Builtins::kTypeof);
   CallCode(callable.code(), RelocInfo::CODE_TARGET, instr);
   __ Bind(&end);
 }
@@ -5485,10 +5464,10 @@ void LCodeGen::DoWrapReceiver(LWrapReceiver* instr) {
            FieldMemOperand(result, SharedFunctionInfo::kCompilerHintsOffset));
 
     // Do not transform the receiver to object for strict mode functions.
-    __ Tbnz(result, SharedFunctionInfo::kStrictModeFunction, &copy_receiver);
+    __ Tbnz(result, SharedFunctionInfo::IsStrictBit::kShift, &copy_receiver);
 
     // Do not transform the receiver to object for builtins.
-    __ Tbnz(result, SharedFunctionInfo::kNative, &copy_receiver);
+    __ Tbnz(result, SharedFunctionInfo::IsNativeBit::kShift, &copy_receiver);
   }
 
   // Normal function. Replace undefined or null with global receiver.

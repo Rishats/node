@@ -250,8 +250,7 @@ Assembler::Assembler(IsolateData isolate_data, void* buffer, int buffer_size)
   relocations_.reserve(128);
 }
 
-
-void Assembler::GetCode(CodeDesc* desc) {
+void Assembler::GetCode(Isolate* isolate, CodeDesc* desc) {
   // Emit constant pool if necessary.
   int constant_pool_offset = EmitConstantPool();
 
@@ -1984,7 +1983,14 @@ void Assembler::GrowBuffer(int needed) {
   if (space < needed) {
     desc.buffer_size += needed - space;
   }
-  CHECK_GT(desc.buffer_size, 0);  // no overflow
+
+  // Some internal data structures overflow for very large buffers,
+  // they must ensure that kMaximalBufferSize is not too large.
+  if (desc.buffer_size > kMaximalBufferSize ||
+      static_cast<size_t>(desc.buffer_size) >
+          isolate_data().max_old_generation_size_) {
+    V8::FatalProcessOutOfMemory("Assembler::GrowBuffer");
+  }
 
   // Set up new buffer.
   desc.buffer = NewArray<byte>(desc.buffer_size);

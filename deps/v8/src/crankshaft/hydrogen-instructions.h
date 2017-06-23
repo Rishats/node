@@ -709,7 +709,6 @@ class HValue : public ZoneObject {
   virtual bool HandleSideEffectDominator(GVNFlag side_effect,
                                          HValue* dominator) {
     UNREACHABLE();
-    return false;
   }
 
   // Check if this instruction has some reason that prevents elimination.
@@ -743,7 +742,6 @@ class HValue : public ZoneObject {
   // compare the non-Operand parts of the instruction.
   virtual bool DataEquals(HValue* other) {
     UNREACHABLE();
-    return false;
   }
 
   bool ToStringOrToNumberCanBeObserved() const {
@@ -1764,7 +1762,6 @@ class HEnterInlined final : public HTemplateInstruction<0> {
                       syntactic_tail_call_mode, zone);
   }
 
-  void RegisterReturnTarget(HBasicBlock* return_target, Zone* zone);
   ZoneList<HBasicBlock*>* return_targets() { return &return_targets_; }
 
   std::ostream& PrintDataTo(std::ostream& os) const override;  // NOLINT
@@ -2312,7 +2309,6 @@ class HUnaryMathOperation final : public HTemplateInstruction<2> {
           return Representation::Integer32();
         default:
           UNREACHABLE();
-          return Representation::None();
       }
     }
   }
@@ -2659,7 +2655,6 @@ class HCheckInstanceType final : public HUnaryOperation {
       case IS_INTERNALIZED_STRING: return HType::String();
     }
     UNREACHABLE();
-    return HType::Tagged();
   }
 
   HValue* Canonicalize() override;
@@ -5196,11 +5191,6 @@ class HObjectAccess final {
 
   static HObjectAccess ForCodeOffset() {
     return HObjectAccess(kInobject, SharedFunctionInfo::kCodeOffset);
-  }
-
-  static HObjectAccess ForOptimizedCodeMap() {
-    return HObjectAccess(kInobject,
-                         SharedFunctionInfo::kOptimizedCodeMapOffset);
   }
 
   static HObjectAccess ForFunctionContextPointer() {

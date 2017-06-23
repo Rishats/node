@@ -31,7 +31,6 @@
 #include "src/builtins/builtins-constructor.h"
 #include "src/code-factory.h"
 #include "src/code-stubs.h"
-#include "src/crankshaft/hydrogen-osr.h"
 #include "src/crankshaft/mips/lithium-gap-resolver-mips.h"
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
@@ -255,21 +254,7 @@ void LCodeGen::DoPrologue(LPrologue* instr) {
   Comment(";;; Prologue end");
 }
 
-
-void LCodeGen::GenerateOsrPrologue() {
-  // Generate the OSR entry prologue at the first unknown OSR value, or if there
-  // are none, at the OSR entrypoint instruction.
-  if (osr_pc_offset_ >= 0) return;
-
-  osr_pc_offset_ = masm()->pc_offset();
-
-  // Adjust the frame size, subsuming the unoptimized frame into the
-  // optimized frame.
-  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
-  DCHECK(slots >= 0);
-  __ Subu(sp, sp, Operand(slots * kPointerSize));
-}
-
+void LCodeGen::GenerateOsrPrologue() { UNREACHABLE(); }
 
 void LCodeGen::GenerateBodyInstructionPre(LInstruction* instr) {
   if (instr->IsCall()) {
@@ -375,9 +360,7 @@ bool LCodeGen::GenerateJumpTable() {
     }
 
     // Add the base address to the offset previously loaded in entry_offset.
-    __ Addu(entry_offset, entry_offset,
-            Operand(ExternalReference::ForDeoptEntry(base)));
-    __ Jump(entry_offset);
+    __ Jump(entry_offset, Operand(ExternalReference::ForDeoptEntry(base)));
   }
   __ RecordComment("]");
 
@@ -438,7 +421,6 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
     return scratch;
   }
   UNREACHABLE();
-  return scratch;
 }
 
 
@@ -475,7 +457,6 @@ DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
     return dbl_scratch;
   }
   UNREACHABLE();
-  return dbl_scratch;
 }
 
 
@@ -548,7 +529,6 @@ Operand LCodeGen::ToOperand(LOperand* op) {
   }
   // Stack slots not implemented, use ToMemOperand instead.
   UNREACHABLE();
-  return Operand(0);
 }
 
 
@@ -1832,11 +1812,7 @@ void LCodeGen::DoArithmeticT(LArithmeticT* instr) {
   DCHECK(ToRegister(instr->right()).is(a0));
   DCHECK(ToRegister(instr->result()).is(v0));
 
-  Handle<Code> code = CodeFactory::BinaryOpIC(isolate(), instr->op()).code();
-  CallCode(code, RelocInfo::CODE_TARGET, instr);
-  // Other arch use a nop here, to signal that there is no inlined
-  // patchable code. Mips does not need the nop, since our marker
-  // instruction (andi zero_reg) will never be used in normal code.
+  UNREACHABLE();
 }
 
 
@@ -2246,7 +2222,6 @@ static Condition ComputeCompareCondition(Token::Value op) {
       return ge;
     default:
       UNREACHABLE();
-      return kNoCondition;
   }
 }
 
@@ -2279,7 +2254,6 @@ static Condition BranchCondition(HHasInstanceTypeAndBranch* instr) {
   if (to == LAST_TYPE) return hs;
   if (from == FIRST_TYPE) return ls;
   UNREACHABLE();
-  return eq;
 }
 
 
@@ -2906,18 +2880,15 @@ void LCodeGen::DoWrapReceiver(LWrapReceiver* instr) {
   Label global_object, result_in_receiver;
 
   if (!instr->hydrogen()->known_function()) {
-    // Do not transform the receiver to object for strict mode
-    // functions.
+    // Do not transform the receiver to object for strict mode functions or
+    // builtins.
     __ lw(scratch,
            FieldMemOperand(function, JSFunction::kSharedFunctionInfoOffset));
     __ lw(scratch,
            FieldMemOperand(scratch, SharedFunctionInfo::kCompilerHintsOffset));
-
-    // Do not transform the receiver to object for builtins.
-    int32_t strict_mode_function_mask =
-        1 <<  (SharedFunctionInfo::kStrictModeFunction + kSmiTagSize);
-    int32_t native_mask = 1 << (SharedFunctionInfo::kNative + kSmiTagSize);
-    __ And(scratch, scratch, Operand(strict_mode_function_mask | native_mask));
+    __ And(scratch, scratch,
+           Operand(SharedFunctionInfo::IsStrictBit::kMask |
+                   SharedFunctionInfo::IsNativeBit::kMask));
     __ Branch(&result_in_receiver, ne, scratch, Operand(zero_reg));
   }
 
@@ -3538,8 +3509,7 @@ void LCodeGen::DoCallWithDescriptor(LCallWithDescriptor* instr) {
     } else {
       DCHECK(instr->target()->IsRegister());
       Register target = ToRegister(instr->target());
-      __ Addu(target, target, Operand(Code::kHeaderSize - kHeapObjectTag));
-      __ Jump(target);
+      __ Jump(target, Code::kHeaderSize - kHeapObjectTag);
     }
   } else {
     LPointerMap* pointers = instr->pointer_map();
@@ -3554,8 +3524,7 @@ void LCodeGen::DoCallWithDescriptor(LCallWithDescriptor* instr) {
       DCHECK(instr->target()->IsRegister());
       Register target = ToRegister(instr->target());
       generator.BeforeCall(__ CallSize(target));
-      __ Addu(target, target, Operand(Code::kHeaderSize - kHeapObjectTag));
-      __ Call(target);
+      __ Call(target, Code::kHeaderSize - kHeapObjectTag);
     }
     generator.AfterCall();
   }
@@ -3571,10 +3540,9 @@ void LCodeGen::DoCallNewArray(LCallNewArray* instr) {
   __ li(a2, instr->hydrogen()->site());
 
   ElementsKind kind = instr->hydrogen()->elements_kind();
-  AllocationSiteOverrideMode override_mode =
-      (AllocationSite::GetMode(kind) == TRACK_ALLOCATION_SITE)
-          ? DISABLE_ALLOCATION_SITES
-          : DONT_OVERRIDE;
+  AllocationSiteOverrideMode override_mode = AllocationSite::ShouldTrack(kind)
+                                                 ? DISABLE_ALLOCATION_SITES
+                                                 : DONT_OVERRIDE;
 
   if (instr->arity() == 0) {
     ArrayNoArgumentConstructorStub stub(isolate(), kind, override_mode);
@@ -5048,7 +5016,7 @@ void LCodeGen::DoTypeof(LTypeof* instr) {
   __ li(v0, Operand(isolate()->factory()->number_string()));
   __ jmp(&end);
   __ bind(&do_call);
-  Callable callable = CodeFactory::Typeof(isolate());
+  Callable callable = Builtins::CallableFor(isolate(), Builtins::kTypeof);
   CallCode(callable.code(), RelocInfo::CODE_TARGET, instr);
   __ bind(&end);
 }
@@ -5322,7 +5290,7 @@ void LCodeGen::DoForInCacheArray(LForInCacheArray* instr) {
   __ bind(&load_cache);
   __ LoadInstanceDescriptors(map, result);
   __ lw(result,
-        FieldMemOperand(result, DescriptorArray::kEnumCacheOffset));
+        FieldMemOperand(result, DescriptorArray::kEnumCacheBridgeOffset));
   __ lw(result,
         FieldMemOperand(result, FixedArray::SizeFor(instr->idx())));
   DeoptimizeIf(eq, instr, DeoptimizeReason::kNoCache, result,

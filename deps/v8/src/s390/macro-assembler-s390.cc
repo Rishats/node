@@ -276,7 +276,7 @@ void MacroAssembler::RecordWriteField(
   lay(dst, MemOperand(object, offset - kHeapObjectTag));
   if (emit_debug_code()) {
     Label ok;
-    AndP(r0, dst, Operand((1 << kPointerSizeLog2) - 1));
+    AndP(r0, dst, Operand(kPointerSize - 1));
     beq(&ok, Label::kNear);
     stop("Unaligned cell in write barrier");
     bind(&ok);
@@ -329,7 +329,7 @@ void MacroAssembler::RecordWriteForMap(Register object, Register map,
   lay(dst, MemOperand(object, HeapObject::kMapOffset - kHeapObjectTag));
   if (emit_debug_code()) {
     Label ok;
-    AndP(r0, dst, Operand((1 << kPointerSizeLog2) - 1));
+    AndP(r0, dst, Operand(kPointerSize - 1));
     beq(&ok, Label::kNear);
     stop("Unaligned cell in write barrier");
     bind(&ok);
@@ -1414,9 +1414,6 @@ void MacroAssembler::InvokeFunction(Register fun, Register new_target,
   LoadW(expected_reg,
         FieldMemOperand(temp_reg,
                         SharedFunctionInfo::kFormalParameterCountOffset));
-#if !defined(V8_TARGET_ARCH_S390X)
-  SmiUntag(expected_reg);
-#endif
 
   ParameterCount expected(expected_reg);
   InvokeFunctionCode(fun, new_target, expected, actual, flag, call_wrapper);
@@ -2377,6 +2374,18 @@ void MacroAssembler::AssertSmi(Register object) {
   }
 }
 
+void MacroAssembler::AssertFixedArray(Register object) {
+  if (emit_debug_code()) {
+    STATIC_ASSERT(kSmiTag == 0);
+    TestIfSmi(object);
+    Check(ne, kOperandIsASmiAndNotAFixedArray, cr0);
+    push(object);
+    CompareObjectType(object, object, object, FIXED_ARRAY_TYPE);
+    pop(object);
+    Check(eq, kOperandIsNotAFixedArray);
+  }
+}
+
 void MacroAssembler::AssertFunction(Register object) {
   if (emit_debug_code()) {
     STATIC_ASSERT(kSmiTag == 0);
@@ -2712,6 +2721,7 @@ void MacroAssembler::CallCFunction(Register function, int num_arguments) {
 void MacroAssembler::CallCFunctionHelper(Register function,
                                          int num_reg_arguments,
                                          int num_double_arguments) {
+  DCHECK_LE(num_reg_arguments + num_double_arguments, kMaxCParameters);
   DCHECK(has_frame());
 
   // Just call directly. The function called cannot cause a GC, or
@@ -3103,7 +3113,6 @@ Register GetRegisterThatIsNotOneOf(Register reg1, Register reg2, Register reg3,
     return candidate;
   }
   UNREACHABLE();
-  return no_reg;
 }
 
 void MacroAssembler::mov(Register dst, const Operand& src) {

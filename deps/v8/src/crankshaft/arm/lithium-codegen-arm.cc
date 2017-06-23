@@ -10,7 +10,6 @@
 #include "src/code-factory.h"
 #include "src/code-stubs.h"
 #include "src/crankshaft/arm/lithium-gap-resolver-arm.h"
-#include "src/crankshaft/hydrogen-osr.h"
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
 #include "src/objects-inl.h"
@@ -224,21 +223,7 @@ void LCodeGen::DoPrologue(LPrologue* instr) {
   Comment(";;; Prologue end");
 }
 
-
-void LCodeGen::GenerateOsrPrologue() {
-  // Generate the OSR entry prologue at the first unknown OSR value, or if there
-  // are none, at the OSR entrypoint instruction.
-  if (osr_pc_offset_ >= 0) return;
-
-  osr_pc_offset_ = masm()->pc_offset();
-
-  // Adjust the frame size, subsuming the unoptimized frame into the
-  // optimized frame.
-  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
-  DCHECK(slots >= 0);
-  __ sub(sp, sp, Operand(slots * kPointerSize));
-}
-
+void LCodeGen::GenerateOsrPrologue() { UNREACHABLE(); }
 
 void LCodeGen::GenerateBodyInstructionPre(LInstruction* instr) {
   if (instr->IsCall()) {
@@ -422,7 +407,6 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
     return scratch;
   }
   UNREACHABLE();
-  return scratch;
 }
 
 
@@ -461,7 +445,6 @@ DwVfpRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
     return dbl_scratch;
   }
   UNREACHABLE();
-  return dbl_scratch;
 }
 
 
@@ -534,7 +517,6 @@ Operand LCodeGen::ToOperand(LOperand* op) {
   }
   // Stack slots not implemented, use ToMemOperand instead.
   UNREACHABLE();
-  return Operand::Zero();
 }
 
 
@@ -664,8 +646,7 @@ void LCodeGen::AddToTranslation(LEnvironment* environment,
 
 int LCodeGen::CallCodeSize(Handle<Code> code, RelocInfo::Mode mode) {
   int size = masm()->CallSize(code, mode);
-  if (code->kind() == Code::BINARY_OP_IC ||
-      code->kind() == Code::COMPARE_IC) {
+  if (code->kind() == Code::COMPARE_IC) {
     size += Assembler::kInstrSize;  // extra nop() added in CallCodeGeneric.
   }
   return size;
@@ -689,13 +670,12 @@ void LCodeGen::CallCodeGeneric(Handle<Code> code,
   // Block literal pool emission to ensure nop indicating no inlined smi code
   // is in the correct position.
   Assembler::BlockConstPoolScope block_const_pool(masm());
-  __ Call(code, mode, TypeFeedbackId::None(), al, storage_mode, false);
+  __ Call(code, mode, al, storage_mode, false);
   RecordSafepointWithLazyDeopt(instr, safepoint_mode);
 
   // Signal that we don't inline smi code before these stubs in the
   // optimizing code generator.
-  if (code->kind() == Code::BINARY_OP_IC ||
-      code->kind() == Code::COMPARE_IC) {
+  if (code->kind() == Code::COMPARE_IC) {
     __ nop();
   }
 }
@@ -1972,11 +1952,7 @@ void LCodeGen::DoArithmeticT(LArithmeticT* instr) {
   DCHECK(ToRegister(instr->right()).is(r0));
   DCHECK(ToRegister(instr->result()).is(r0));
 
-  Handle<Code> code = CodeFactory::BinaryOpIC(isolate(), instr->op()).code();
-  // Block literal pool emission to ensure nop indicating no inlined smi code
-  // is in the correct position.
-  Assembler::BlockConstPoolScope block_const_pool(masm());
-  CallCode(code, RelocInfo::CODE_TARGET, instr);
+  UNREACHABLE();
 }
 
 
@@ -2341,7 +2317,6 @@ static Condition ComputeCompareCondition(Token::Value op) {
       return ge;
     default:
       UNREACHABLE();
-      return kNoCondition;
   }
 }
 
@@ -2374,7 +2349,6 @@ static Condition BranchCondition(HHasInstanceTypeAndBranch* instr) {
   if (to == LAST_TYPE) return hs;
   if (from == FIRST_TYPE) return ls;
   UNREACHABLE();
-  return eq;
 }
 
 
@@ -2978,18 +2952,14 @@ void LCodeGen::DoWrapReceiver(LWrapReceiver* instr) {
   Label global_object, result_in_receiver;
 
   if (!instr->hydrogen()->known_function()) {
-    // Do not transform the receiver to object for strict mode
-    // functions.
+    // Do not transform the receiver to object for strict mode functions or
+    // builtins.
     __ ldr(scratch,
            FieldMemOperand(function, JSFunction::kSharedFunctionInfoOffset));
     __ ldr(scratch,
            FieldMemOperand(scratch, SharedFunctionInfo::kCompilerHintsOffset));
-    int mask = 1 << (SharedFunctionInfo::kStrictModeFunction + kSmiTagSize);
-    __ tst(scratch, Operand(mask));
-    __ b(ne, &result_in_receiver);
-
-    // Do not transform the receiver to object for builtins.
-    __ tst(scratch, Operand(1 << (SharedFunctionInfo::kNative + kSmiTagSize)));
+    __ tst(scratch, Operand(SharedFunctionInfo::IsStrictBit::kMask |
+                            SharedFunctionInfo::IsNativeBit::kMask));
     __ b(ne, &result_in_receiver);
   }
 
@@ -3582,10 +3552,10 @@ void LCodeGen::DoCallWithDescriptor(LCallWithDescriptor* instr) {
       PlatformInterfaceDescriptor* call_descriptor =
           instr->descriptor().platform_specific_descriptor();
       if (call_descriptor != NULL) {
-        __ Call(code, RelocInfo::CODE_TARGET, TypeFeedbackId::None(), al,
+        __ Call(code, RelocInfo::CODE_TARGET, al,
                 call_descriptor->storage_mode());
       } else {
-        __ Call(code, RelocInfo::CODE_TARGET, TypeFeedbackId::None(), al);
+        __ Call(code, RelocInfo::CODE_TARGET, al);
       }
     } else {
       DCHECK(instr->target()->IsRegister());
@@ -3615,10 +3585,9 @@ void LCodeGen::DoCallNewArray(LCallNewArray* instr) {
   __ Move(r2, instr->hydrogen()->site());
 
   ElementsKind kind = instr->hydrogen()->elements_kind();
-  AllocationSiteOverrideMode override_mode =
-      (AllocationSite::GetMode(kind) == TRACK_ALLOCATION_SITE)
-          ? DISABLE_ALLOCATION_SITES
-          : DONT_OVERRIDE;
+  AllocationSiteOverrideMode override_mode = AllocationSite::ShouldTrack(kind)
+                                                 ? DISABLE_ALLOCATION_SITES
+                                                 : DONT_OVERRIDE;
 
   if (instr->arity() == 0) {
     ArrayNoArgumentConstructorStub stub(isolate(), kind, override_mode);
@@ -5048,7 +5017,7 @@ void LCodeGen::DoTypeof(LTypeof* instr) {
   __ mov(r0, Operand(isolate()->factory()->number_string()));
   __ jmp(&end);
   __ bind(&do_call);
-  Callable callable = CodeFactory::Typeof(isolate());
+  Callable callable = Builtins::CallableFor(isolate(), Builtins::kTypeof);
   CallCode(callable.code(), RelocInfo::CODE_TARGET, instr);
   __ bind(&end);
 }
@@ -5293,7 +5262,7 @@ void LCodeGen::DoForInCacheArray(LForInCacheArray* instr) {
   __ bind(&load_cache);
   __ LoadInstanceDescriptors(map, result);
   __ ldr(result,
-         FieldMemOperand(result, DescriptorArray::kEnumCacheOffset));
+         FieldMemOperand(result, DescriptorArray::kEnumCacheBridgeOffset));
   __ ldr(result,
          FieldMemOperand(result, FixedArray::SizeFor(instr->idx())));
   __ cmp(result, Operand::Zero());

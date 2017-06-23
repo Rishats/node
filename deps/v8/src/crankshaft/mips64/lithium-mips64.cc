@@ -8,7 +8,6 @@
 
 #if V8_TARGET_ARCH_MIPS64
 
-#include "src/crankshaft/hydrogen-osr.h"
 #include "src/crankshaft/lithium-inl.h"
 #include "src/crankshaft/mips64/lithium-codegen-mips64.h"
 
@@ -121,7 +120,6 @@ const char* LArithmeticD::Mnemonic() const {
     case Token::MOD: return "mod-d";
     default:
       UNREACHABLE();
-      return NULL;
   }
 }
 
@@ -142,7 +140,6 @@ const char* LArithmeticT::Mnemonic() const {
     case Token::SHR: return "srl-t";
     default:
       UNREACHABLE();
-      return NULL;
   }
 }
 
@@ -361,14 +358,6 @@ LPlatformChunk* LChunkBuilder::Build() {
   chunk_ = new(zone()) LPlatformChunk(info(), graph());
   LPhase phase("L_Building chunk", chunk_);
   status_ = BUILDING;
-
-  // If compiling for OSR, reserve space for the unoptimized frame,
-  // which will be subsumed into this frame.
-  if (graph()->has_osr()) {
-    for (int i = graph()->osr()->UnoptimizedFrameSlots(); i > 0; i--) {
-      chunk_->GetNextSpillIndex(GENERAL_REGISTERS);
-    }
-  }
 
   const ZoneList<HBasicBlock*>* blocks = graph()->blocks();
   for (int i = 0; i < blocks->length(); i++) {
@@ -614,7 +603,6 @@ LInstruction* LChunkBuilder::DoDummyUse(HDummyUse* instr) {
 
 LInstruction* LChunkBuilder::DoEnvironmentMarker(HEnvironmentMarker* instr) {
   UNREACHABLE();
-  return NULL;
 }
 
 
@@ -1067,7 +1055,6 @@ LInstruction* LChunkBuilder::DoUnaryMathOperation(HUnaryMathOperation* instr) {
       return DoMathClz32(instr);
     default:
       UNREACHABLE();
-      return NULL;
   }
 }
 
@@ -1722,7 +1709,6 @@ LInstruction* LChunkBuilder::DoForceRepresentation(HForceRepresentation* bad) {
   // All HForceRepresentation instructions should be eliminated in the
   // representation change phase of Hydrogen.
   UNREACHABLE();
-  return NULL;
 }
 
 
@@ -1817,7 +1803,6 @@ LInstruction* LChunkBuilder::DoChange(HChange* instr) {
     }
   }
   UNREACHABLE();
-  return NULL;
 }
 
 
@@ -1914,7 +1899,6 @@ LInstruction* LChunkBuilder::DoConstant(HConstant* instr) {
     return DefineAsRegister(new(zone()) LConstantT);
   } else {
     UNREACHABLE();
-    return NULL;
   }
 }
 

@@ -804,10 +804,8 @@ void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   CommonArrayConstructorStub::GenerateStubsAheadOfTime(isolate);
   CreateAllocationSiteStub::GenerateAheadOfTime(isolate);
   CreateWeakCellStub::GenerateAheadOfTime(isolate);
-  BinaryOpICStub::GenerateAheadOfTime(isolate);
   StoreRegistersStateStub::GenerateAheadOfTime(isolate);
   RestoreRegistersStateStub::GenerateAheadOfTime(isolate);
-  BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(isolate);
   StoreFastElementStub::GenerateAheadOfTime(isolate);
 }
 
@@ -1205,87 +1203,6 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   __ b(r14);
 }
 
-void RegExpExecStub::Generate(MacroAssembler* masm) {
-#ifdef V8_INTERPRETED_REGEXP
-  // This case is handled prior to the RegExpExecStub call.
-  __ Abort(kUnexpectedRegExpExecCall);
-#else   // V8_INTERPRETED_REGEXP
-  __ CleanseP(r14);
-
-  // Isolates: note we add an additional parameter here (isolate pointer).
-  const int kRegExpExecuteArguments = 10;
-  const int kParameterRegisters = 5;
-  __ EnterExitFrame(false, kRegExpExecuteArguments - kParameterRegisters);
-
-  // Stack pointer now points to cell where return address is to be written.
-  // Arguments are before that on the stack or in registers.
-
-  // Argument 10 (in stack parameter area): Pass current isolate address.
-  __ mov(r6, Operand(ExternalReference::isolate_address(isolate())));
-  __ StoreP(r6, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize +
-                                   4 * kPointerSize));
-
-  // Argument 9 is a dummy that reserves the space used for
-  // the return address added by the ExitFrame in native calls.
-  __ mov(r6, Operand::Zero());
-  __ StoreP(r6, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize +
-                                   3 * kPointerSize));
-
-  // Argument 8: Indicate that this is a direct call from JavaScript.
-  __ mov(r6, Operand(1));
-  __ StoreP(r6, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize +
-                                   2 * kPointerSize));
-
-  // Argument 7: Start (high end) of backtracking stack memory area.
-  ExternalReference address_of_regexp_stack_memory_address =
-      ExternalReference::address_of_regexp_stack_memory_address(isolate());
-  ExternalReference address_of_regexp_stack_memory_size =
-      ExternalReference::address_of_regexp_stack_memory_size(isolate());
-  __ mov(r6, Operand(address_of_regexp_stack_memory_address));
-  __ LoadP(r6, MemOperand(r6, 0));
-  __ mov(r1, Operand(address_of_regexp_stack_memory_size));
-  __ LoadP(r1, MemOperand(r1, 0));
-  __ AddP(r6, r1);
-  __ StoreP(r6, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize +
-                                   1 * kPointerSize));
-
-  // Argument 6: Set the number of capture registers to zero to force
-  // global egexps to behave as non-global.  This does not affect non-global
-  // regexps.
-  __ mov(r6, Operand::Zero());
-  __ StoreP(r6, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize +
-                                   0 * kPointerSize));
-
-  // Argument 5 (r6): static offsets vector buffer.
-  __ mov(
-      r6,
-      Operand(ExternalReference::address_of_static_offsets_vector(isolate())));
-
-  // Argument 4, r5: End of string data
-  // Argument 3, r4: Start of string data
-  CHECK(r5.is(RegExpExecDescriptor::StringEndRegister()));
-  CHECK(r4.is(RegExpExecDescriptor::StringStartRegister()));
-
-  // Argument 2 (r3): Previous index.
-  CHECK(r3.is(RegExpExecDescriptor::LastIndexRegister()));
-
-  // Argument 1 (r2): Subject string.
-  CHECK(r2.is(RegExpExecDescriptor::StringRegister()));
-
-  // Locate the code entry and call it.
-  Register code_reg = RegExpExecDescriptor::CodeRegister();
-  __ AddP(code_reg, Operand(Code::kHeaderSize - kHeapObjectTag));
-
-  DirectCEntryStub stub(isolate());
-  stub.GenerateCall(masm, code_reg);
-
-  __ LeaveExitFrame(false, no_reg, true);
-
-  // Return the smi-tagged result.
-  __ SmiTag(r2);
-  __ Ret();
-#endif  // V8_INTERPRETED_REGEXP
-}
 
 static void CallStubInRecordCallTarget(MacroAssembler* masm, CodeStub* stub) {
   // r2 : number of arguments to the construct function
@@ -1638,35 +1555,6 @@ void StringHelper::GenerateOneByteCharsCompareLoop(
   __ AddP(index, Operand(1));
   __ CmpP(index, Operand::Zero());
   __ bne(&loop);
-}
-
-void BinaryOpICWithAllocationSiteStub::Generate(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- r3    : left
-  //  -- r2    : right
-  // r3: second string
-  // -----------------------------------
-
-  // Load r4 with the allocation site.  We stick an undefined dummy value here
-  // and replace it with the real allocation site later when we instantiate this
-  // stub in BinaryOpICWithAllocationSiteStub::GetCodeCopyFromTemplate().
-  __ Move(r4, isolate()->factory()->undefined_value());
-
-  // Make sure that we actually patched the allocation site.
-  if (FLAG_debug_code) {
-    __ TestIfSmi(r4);
-    __ Assert(ne, kExpectedAllocationSite, cr0);
-    __ push(r4);
-    __ LoadP(r4, FieldMemOperand(r4, HeapObject::kMapOffset));
-    __ CompareRoot(r4, Heap::kAllocationSiteMapRootIndex);
-    __ pop(r4);
-    __ Assert(eq, kExpectedAllocationSite);
-  }
-
-  // Tail call into the stub that handles binary operations with allocation
-  // sites.
-  BinaryOpWithAllocationSiteStub stub(isolate(), state());
-  __ TailCallStub(&stub);
 }
 
 void CompareICStub::GenerateBooleans(MacroAssembler* masm) {
@@ -2316,10 +2204,11 @@ void RecordWriteStub::InformIncrementalMarker(MacroAssembler* masm) {
 void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
     MacroAssembler* masm, OnNoNeedToInformIncrementalMarker on_no_need,
     Mode mode) {
-  Label on_black;
   Label need_incremental;
   Label need_incremental_pop_scratch;
 
+#ifndef V8_CONCURRENT_MARKING
+  Label on_black;
   // Let's look at the color of the object:  If it is not black we don't have
   // to inform the incremental marker.
   __ JumpIfBlack(regs_.object(), regs_.scratch0(), regs_.scratch1(), &on_black);
@@ -2333,6 +2222,7 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
   }
 
   __ bind(&on_black);
+#endif
 
   // Get the value from the slot.
   __ LoadP(regs_.scratch0(), MemOperand(regs_.address(), 0));
@@ -2604,7 +2494,7 @@ static void ArrayConstructorStubAheadOfTimeHelper(Isolate* isolate) {
     ElementsKind kind = GetFastElementsKindFromSequenceIndex(i);
     T stub(isolate, kind);
     stub.GetCode();
-    if (AllocationSite::GetMode(kind) != DONT_TRACK_ALLOCATION_SITE) {
+    if (AllocationSite::ShouldTrack(kind)) {
       T stub1(isolate, kind, DISABLE_ALLOCATION_SITES);
       stub1.GetCode();
     }
@@ -2956,9 +2846,7 @@ void CallApiCallbackStub::Generate(MacroAssembler* masm) {
   __ push(call_data);
 
   Register scratch = call_data;
-  if (!call_data_undefined()) {
-    __ LoadRoot(scratch, Heap::kUndefinedValueRootIndex);
-  }
+  __ LoadRoot(scratch, Heap::kUndefinedValueRootIndex);
   // return value
   __ push(scratch);
   // return value default

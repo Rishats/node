@@ -193,9 +193,6 @@ void HEnvironmentLivenessAnalysisPhase::Run() {
         for (int i = 0; i < block->predecessors()->length(); ++i) {
           worklist.Add(block->predecessors()->at(i)->block_id());
         }
-        if (block->IsInlineReturnTarget()) {
-          worklist.Add(block->inlined_entry_block()->block_id());
-        }
       }
     }
     // Only collect bind/lookup instructions during the first pass.
@@ -222,7 +219,7 @@ void HEnvironmentLivenessAnalysisPhase::Run() {
 #ifdef DEBUG
 bool HEnvironmentLivenessAnalysisPhase::VerifyClosures(
     Handle<JSFunction> a, Handle<JSFunction> b) {
-  Heap::RelocationLock for_heap_access(isolate()->heap());
+  base::LockGuard<base::Mutex> guard(isolate()->heap()->relocation_mutex());
   AllowHandleDereference for_verification;
   return a.is_identical_to(b);
 }

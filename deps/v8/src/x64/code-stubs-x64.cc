@@ -350,85 +350,6 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   __ ret(0);
 }
 
-void RegExpExecStub::Generate(MacroAssembler* masm) {
-#ifdef V8_INTERPRETED_REGEXP
-  // This case is handled prior to the RegExpExecStub call.
-  __ Abort(kUnexpectedRegExpExecCall);
-#else  // V8_INTERPRETED_REGEXP
-  // Isolates: note we add an additional parameter here (isolate pointer).
-  static const int kRegExpExecuteArguments = 9;
-  int argument_slots_on_stack =
-      masm->ArgumentStackSlotsForCFunctionCall(kRegExpExecuteArguments);
-  __ EnterApiExitFrame(argument_slots_on_stack);
-
-  // Argument 9: Pass current isolate address.
-  __ LoadAddress(kScratchRegister,
-                 ExternalReference::isolate_address(isolate()));
-  __ movq(Operand(rsp, (argument_slots_on_stack - 1) * kRegisterSize),
-          kScratchRegister);
-
-  // Argument 8: Indicate that this is a direct call from JavaScript.
-  __ movq(Operand(rsp, (argument_slots_on_stack - 2) * kRegisterSize),
-          Immediate(1));
-
-  // Argument 7: Start (high end) of backtracking stack memory area.
-  ExternalReference address_of_regexp_stack_memory_address =
-      ExternalReference::address_of_regexp_stack_memory_address(isolate());
-  ExternalReference address_of_regexp_stack_memory_size =
-      ExternalReference::address_of_regexp_stack_memory_size(isolate());
-  __ Move(kScratchRegister, address_of_regexp_stack_memory_address);
-  __ movp(r12, Operand(kScratchRegister, 0));
-  __ Move(kScratchRegister, address_of_regexp_stack_memory_size);
-  __ addp(r12, Operand(kScratchRegister, 0));
-  __ movq(Operand(rsp, (argument_slots_on_stack - 3) * kRegisterSize), r12);
-
-  // Argument 6: Set the number of capture registers to zero to force global
-  // regexps to behave as non-global.  This does not affect non-global regexps.
-  // Argument 6 is passed in r9 on Linux and on the stack on Windows.
-#ifdef _WIN64
-  __ movq(Operand(rsp, (argument_slots_on_stack - 4) * kRegisterSize),
-          Immediate(0));
-#else
-  __ Set(r9, 0);
-#endif
-
-  // Argument 5: static offsets vector buffer.
-  // Argument 5 passed in r8 on Linux and on the stack on Windows.
-#ifdef _WIN64
-  __ LoadAddress(
-      r12, ExternalReference::address_of_static_offsets_vector(isolate()));
-  __ movq(Operand(rsp, (argument_slots_on_stack - 5) * kRegisterSize), r12);
-#else  // _WIN64
-  __ LoadAddress(
-      r8, ExternalReference::address_of_static_offsets_vector(isolate()));
-#endif
-
-  // Argument 2: Previous index.
-  // TODO(jgruber): Ideally, LastIndexRegister would already equal arg_reg_2,
-  // but that makes register allocation fail.
-  __ movp(arg_reg_2, RegExpExecDescriptor::LastIndexRegister());
-
-  // Argument 4: End of string data
-  // Argument 3: Start of string data
-  CHECK(arg_reg_4.is(RegExpExecDescriptor::StringEndRegister()));
-  CHECK(arg_reg_3.is(RegExpExecDescriptor::StringStartRegister()));
-
-  // Argument 1: Original subject string.
-  CHECK(arg_reg_1.is(RegExpExecDescriptor::StringRegister()));
-
-  __ addp(RegExpExecDescriptor::CodeRegister(),
-          Immediate(Code::kHeaderSize - kHeapObjectTag));
-  __ call(RegExpExecDescriptor::CodeRegister());
-
-  __ LeaveApiExitFrame(true);
-
-  // TODO(jgruber): Don't tag return value once this is supported by stubs.
-  __ Integer32ToSmi(rax, rax);
-  __ ret(0 * kPointerSize);
-#endif  // V8_INTERPRETED_REGEXP
-}
-
-
 static int NegativeComparisonResult(Condition cc) {
   DCHECK(cc != equal);
   DCHECK((cc == less) || (cc == less_equal)
@@ -915,8 +836,6 @@ void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   CommonArrayConstructorStub::GenerateStubsAheadOfTime(isolate);
   CreateAllocationSiteStub::GenerateAheadOfTime(isolate);
   CreateWeakCellStub::GenerateAheadOfTime(isolate);
-  BinaryOpICStub::GenerateAheadOfTime(isolate);
-  BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(isolate);
   StoreFastElementStub::GenerateAheadOfTime(isolate);
 }
 
@@ -1480,34 +1399,6 @@ void StringHelper::GenerateOneByteCharsCompareLoop(
   __ j(not_equal, chars_not_equal, near_jump);
   __ incq(index);
   __ j(not_zero, &loop);
-}
-
-
-void BinaryOpICWithAllocationSiteStub::Generate(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- rdx    : left
-  //  -- rax    : right
-  //  -- rsp[0] : return address
-  // -----------------------------------
-
-  // Load rcx with the allocation site.  We stick an undefined dummy value here
-  // and replace it with the real allocation site later when we instantiate this
-  // stub in BinaryOpICWithAllocationSiteStub::GetCodeCopyFromTemplate().
-  __ Move(rcx, isolate()->factory()->undefined_value());
-
-  // Make sure that we actually patched the allocation site.
-  if (FLAG_debug_code) {
-    __ testb(rcx, Immediate(kSmiTagMask));
-    __ Assert(not_equal, kExpectedAllocationSite);
-    __ Cmp(FieldOperand(rcx, HeapObject::kMapOffset),
-           isolate()->factory()->allocation_site_map());
-    __ Assert(equal, kExpectedAllocationSite);
-  }
-
-  // Tail call into the stub that handles binary operations with allocation
-  // sites.
-  BinaryOpWithAllocationSiteStub stub(isolate(), state());
-  __ TailCallStub(&stub);
 }
 
 
@@ -2153,10 +2044,11 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
     MacroAssembler* masm,
     OnNoNeedToInformIncrementalMarker on_no_need,
     Mode mode) {
-  Label on_black;
   Label need_incremental;
   Label need_incremental_pop_object;
 
+#ifndef V8_CONCURRENT_MARKING
+  Label on_black;
   // Let's look at the color of the object:  If it is not black we don't have
   // to inform the incremental marker.
   __ JumpIfBlack(regs_.object(),
@@ -2174,6 +2066,7 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
   }
 
   __ bind(&on_black);
+#endif
 
   // Get the value from the slot.
   __ movp(regs_.scratch0(), Operand(regs_.address(), 0));
@@ -2401,7 +2294,7 @@ static void ArrayConstructorStubAheadOfTimeHelper(Isolate* isolate) {
     ElementsKind kind = GetFastElementsKindFromSequenceIndex(i);
     T stub(isolate, kind);
     stub.GetCode();
-    if (AllocationSite::GetMode(kind) != DONT_TRACK_ALLOCATION_SITE) {
+    if (AllocationSite::ShouldTrack(kind)) {
       T stub1(isolate, kind, DISABLE_ALLOCATION_SITES);
       stub1.GetCode();
     }
@@ -2822,15 +2715,13 @@ void CallApiCallbackStub::Generate(MacroAssembler* masm) {
 
   // call data
   __ Push(call_data);
-  Register scratch = call_data;
-  if (!this->call_data_undefined()) {
-    __ LoadRoot(scratch, Heap::kUndefinedValueRootIndex);
-  }
+
   // return value
-  __ Push(scratch);
+  __ PushRoot(Heap::kUndefinedValueRootIndex);
   // return value default
-  __ Push(scratch);
+  __ PushRoot(Heap::kUndefinedValueRootIndex);
   // isolate
+  Register scratch = call_data;
   __ Move(scratch, ExternalReference::isolate_address(masm->isolate()));
   __ Push(scratch);
   // holder

@@ -220,21 +220,14 @@ int LCodeGenBase::DefineDeoptimizationLiteral(Handle<Object> literal) {
 void LCodeGenBase::WriteTranslationFrame(LEnvironment* environment,
                                          Translation* translation) {
   int translation_size = environment->translation_size();
+#ifdef DEBUG
   // The output frame height does not include the parameters.
   int height = translation_size - environment->parameter_count();
+#endif  // DEBUG
 
   switch (environment->frame_type()) {
     case JS_FUNCTION: {
-      int shared_id = DefineDeoptimizationLiteral(
-          environment->entry() ? environment->entry()->shared()
-                               : info()->shared_info());
-      translation->BeginJSFrame(environment->ast_id(), shared_id, height);
-      if (info()->closure().is_identical_to(environment->closure())) {
-        translation->StoreJSFrameFunction();
-      } else {
-        int closure_id = DefineDeoptimizationLiteral(environment->closure());
-        translation->StoreLiteral(closure_id);
-      }
+      UNREACHABLE();
       break;
     }
     case JS_CONSTRUCT: {
@@ -394,15 +387,6 @@ void LCodeGenBase::PopulateDeoptimizationLiteralsWithInlinedFunctions() {
     }
   }
   inlined_function_count_ = deoptimization_literals_.length();
-
-  // Define deoptimization literals for all unoptimized code objects of inlined
-  // functions. This ensures unoptimized code is kept alive by optimized code.
-  for (const CompilationInfo::InlinedFunctionHolder& inlined :
-       info()->inlined_functions()) {
-    if (!inlined.shared_info.is_identical_to(info()->shared_info())) {
-      DefineDeoptimizationLiteral(inlined.inlined_code_object_root);
-    }
-  }
 }
 
 Deoptimizer::DeoptInfo LCodeGenBase::MakeDeoptInfo(

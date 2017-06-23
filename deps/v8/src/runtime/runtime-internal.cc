@@ -133,7 +133,6 @@ const char* ElementsKindToType(ElementsKind fixed_elements_kind) {
 
     default:
       UNREACHABLE();
-      return "";
   }
 }
 
@@ -288,14 +287,6 @@ RUNTIME_FUNCTION(Runtime_ThrowNotConstructor) {
       isolate, NewTypeError(MessageTemplate::kNotConstructor, object));
 }
 
-RUNTIME_FUNCTION(Runtime_ThrowNotGeneric) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, arg0, 0);
-  THROW_NEW_ERROR_RETURN_FAILURE(
-      isolate, NewTypeError(MessageTemplate::kNotGeneric, arg0));
-}
-
 RUNTIME_FUNCTION(Runtime_ThrowGeneratorRunning) {
   HandleScope scope(isolate);
   DCHECK_EQ(0, args.length());
@@ -311,7 +302,6 @@ RUNTIME_FUNCTION(Runtime_ThrowApplyNonFunction) {
   THROW_NEW_ERROR_RETURN_FAILURE(
       isolate, NewTypeError(MessageTemplate::kApplyNonFunction, object, type));
 }
-
 
 RUNTIME_FUNCTION(Runtime_StackGuard) {
   SealHandleScope shs(isolate);
@@ -383,7 +373,6 @@ RUNTIME_FUNCTION(Runtime_AllocateSeqTwoByteString) {
 
 RUNTIME_FUNCTION(Runtime_IS_VAR) {
   UNREACHABLE();  // implemented as macro in the parser
-  return NULL;
 }
 
 
@@ -415,10 +404,10 @@ bool ComputeLocation(Isolate* isolate, MessageLocation* target) {
 Handle<String> RenderCallSite(Isolate* isolate, Handle<Object> object) {
   MessageLocation location;
   if (ComputeLocation(isolate, &location)) {
-    std::unique_ptr<ParseInfo> info(new ParseInfo(location.shared()));
-    if (parsing::ParseAny(info.get(), isolate)) {
+    ParseInfo info(location.shared());
+    if (parsing::ParseAny(&info, isolate)) {
       CallPrinter printer(isolate, location.shared()->IsUserJavaScript());
-      Handle<String> str = printer.Print(info->literal(), location.start_pos());
+      Handle<String> str = printer.Print(info.literal(), location.start_pos());
       if (str->length() > 0) return str;
     } else {
       isolate->clear_pending_exception();
@@ -455,11 +444,18 @@ RUNTIME_FUNCTION(Runtime_ThrowConstructedNonConstructable) {
       isolate, NewTypeError(MessageTemplate::kNotConstructor, callsite));
 }
 
-RUNTIME_FUNCTION(Runtime_ThrowDerivedConstructorReturnedNonObject) {
+RUNTIME_FUNCTION(Runtime_ThrowConstructorReturnedNonObject) {
   HandleScope scope(isolate);
   DCHECK_EQ(0, args.length());
+  if (FLAG_harmony_restrict_constructor_return) {
+    THROW_NEW_ERROR_RETURN_FAILURE(
+        isolate,
+        NewTypeError(MessageTemplate::kClassConstructorReturnedNonObject));
+  }
+
   THROW_NEW_ERROR_RETURN_FAILURE(
-      isolate, NewTypeError(MessageTemplate::kDerivedConstructorReturn));
+      isolate,
+      NewTypeError(MessageTemplate::kDerivedConstructorReturnedNonObject));
 }
 
 RUNTIME_FUNCTION(Runtime_ThrowUndefinedOrNullToObject) {

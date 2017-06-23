@@ -462,69 +462,6 @@ void MathPowStub::Generate(MacroAssembler* masm) {
   __ ret(0);
 }
 
-void RegExpExecStub::Generate(MacroAssembler* masm) {
-#ifdef V8_INTERPRETED_REGEXP
-  // This case is handled prior to the RegExpExecStub call.
-  __ Abort(kUnexpectedRegExpExecCall);
-#else  // V8_INTERPRETED_REGEXP
-  // Isolates: note we add an additional parameter here (isolate pointer).
-  static const int kRegExpExecuteArguments = 9;
-  __ EnterApiExitFrame(kRegExpExecuteArguments);
-
-  // Argument 9: Pass current isolate address.
-  __ mov(Operand(esp, 8 * kPointerSize),
-      Immediate(ExternalReference::isolate_address(isolate())));
-
-  // Argument 8: Indicate that this is a direct call from JavaScript.
-  __ mov(Operand(esp, 7 * kPointerSize), Immediate(1));
-
-  // Argument 7: Start (high end) of backtracking stack memory area.
-  ExternalReference address_of_regexp_stack_memory_address =
-      ExternalReference::address_of_regexp_stack_memory_address(isolate());
-  ExternalReference address_of_regexp_stack_memory_size =
-      ExternalReference::address_of_regexp_stack_memory_size(isolate());
-  __ mov(esi, Operand::StaticVariable(address_of_regexp_stack_memory_address));
-  __ add(esi, Operand::StaticVariable(address_of_regexp_stack_memory_size));
-  __ mov(Operand(esp, 6 * kPointerSize), esi);
-
-  // Argument 6: Set the number of capture registers to zero to force global
-  // regexps to behave as non-global.  This does not affect non-global regexps.
-  __ mov(Operand(esp, 5 * kPointerSize), Immediate(0));
-
-  // Argument 5: static offsets vector buffer.
-  __ mov(Operand(esp, 4 * kPointerSize),
-         Immediate(ExternalReference::address_of_static_offsets_vector(
-             isolate())));
-
-  // Argument 4: End of string data
-  // Argument 3: Start of string data
-  __ mov(Operand(esp, 3 * kPointerSize),
-         RegExpExecDescriptor::StringEndRegister());
-  __ mov(Operand(esp, 2 * kPointerSize),
-         RegExpExecDescriptor::StringStartRegister());
-
-  // Argument 2: Previous index.
-  __ mov(Operand(esp, 1 * kPointerSize),
-         RegExpExecDescriptor::LastIndexRegister());
-
-  // Argument 1: Original subject string.
-  __ mov(Operand(esp, 0 * kPointerSize),
-         RegExpExecDescriptor::StringRegister());
-
-  // Locate the code entry and call it.
-  __ add(RegExpExecDescriptor::CodeRegister(),
-         Immediate(Code::kHeaderSize - kHeapObjectTag));
-  __ call(RegExpExecDescriptor::CodeRegister());
-
-  // Drop arguments and come back to JS mode.
-  __ LeaveApiExitFrame(true);
-
-  // TODO(jgruber): Don't tag return value once this is supported by stubs.
-  __ SmiTag(eax);
-  __ ret(0 * kPointerSize);
-#endif  // V8_INTERPRETED_REGEXP
-}
-
 
 static int NegativeComparisonResult(Condition cc) {
   DCHECK(cc != equal);
@@ -1014,8 +951,6 @@ void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   CommonArrayConstructorStub::GenerateStubsAheadOfTime(isolate);
   CreateAllocationSiteStub::GenerateAheadOfTime(isolate);
   CreateWeakCellStub::GenerateAheadOfTime(isolate);
-  BinaryOpICStub::GenerateAheadOfTime(isolate);
-  BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(isolate);
   StoreFastElementStub::GenerateAheadOfTime(isolate);
 }
 
@@ -1497,34 +1432,6 @@ void StringHelper::GenerateOneByteCharsCompareLoop(
   __ j(not_equal, chars_not_equal, chars_not_equal_near);
   __ inc(index);
   __ j(not_zero, &loop);
-}
-
-
-void BinaryOpICWithAllocationSiteStub::Generate(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- edx    : left
-  //  -- eax    : right
-  //  -- esp[0] : return address
-  // -----------------------------------
-
-  // Load ecx with the allocation site.  We stick an undefined dummy value here
-  // and replace it with the real allocation site later when we instantiate this
-  // stub in BinaryOpICWithAllocationSiteStub::GetCodeCopyFromTemplate().
-  __ mov(ecx, isolate()->factory()->undefined_value());
-
-  // Make sure that we actually patched the allocation site.
-  if (FLAG_debug_code) {
-    __ test(ecx, Immediate(kSmiTagMask));
-    __ Assert(not_equal, kExpectedAllocationSite);
-    __ cmp(FieldOperand(ecx, HeapObject::kMapOffset),
-           isolate()->factory()->allocation_site_map());
-    __ Assert(equal, kExpectedAllocationSite);
-  }
-
-  // Tail call into the stub that handles binary operations with allocation
-  // sites.
-  BinaryOpWithAllocationSiteStub stub(isolate(), state());
-  __ TailCallStub(&stub);
 }
 
 
@@ -2181,8 +2088,10 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
     MacroAssembler* masm,
     OnNoNeedToInformIncrementalMarker on_no_need,
     Mode mode) {
-  Label object_is_black, need_incremental, need_incremental_pop_object;
+  Label need_incremental, need_incremental_pop_object;
 
+#ifndef V8_CONCURRENT_MARKING
+  Label object_is_black;
   // Let's look at the color of the object:  If it is not black we don't have
   // to inform the incremental marker.
   __ JumpIfBlack(regs_.object(),
@@ -2200,6 +2109,7 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
   }
 
   __ bind(&object_is_black);
+#endif
 
   // Get the value from the slot.
   __ mov(regs_.scratch0(), Operand(regs_.address(), 0));
@@ -2424,7 +2334,7 @@ static void ArrayConstructorStubAheadOfTimeHelper(Isolate* isolate) {
     ElementsKind kind = GetFastElementsKindFromSequenceIndex(i);
     T stub(isolate, kind);
     stub.GetCode();
-    if (AllocationSite::GetMode(kind) != DONT_TRACK_ALLOCATION_SITE) {
+    if (AllocationSite::ShouldTrack(kind)) {
       T stub1(isolate, kind, DISABLE_ALLOCATION_SITES);
       stub1.GetCode();
     }
@@ -2843,23 +2753,16 @@ void CallApiCallbackStub::Generate(MacroAssembler* masm) {
   // call data
   __ push(call_data);
 
-  Register scratch = call_data;
-  if (!call_data_undefined()) {
-    // return value
-    __ push(Immediate(masm->isolate()->factory()->undefined_value()));
-    // return value default
-    __ push(Immediate(masm->isolate()->factory()->undefined_value()));
-  } else {
-    // return value
-    __ push(scratch);
-    // return value default
-    __ push(scratch);
-  }
+  // return value
+  __ push(Immediate(masm->isolate()->factory()->undefined_value()));
+  // return value default
+  __ push(Immediate(masm->isolate()->factory()->undefined_value()));
   // isolate
   __ push(Immediate(reinterpret_cast<int>(masm->isolate())));
   // holder
   __ push(holder);
 
+  Register scratch = call_data;
   __ mov(scratch, esp);
 
   // push return address

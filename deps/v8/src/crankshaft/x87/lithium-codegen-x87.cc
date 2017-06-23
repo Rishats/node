@@ -11,7 +11,6 @@
 #include "src/code-factory.h"
 #include "src/code-stubs.h"
 #include "src/codegen.h"
-#include "src/crankshaft/hydrogen-osr.h"
 #include "src/deoptimizer.h"
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
@@ -200,28 +199,7 @@ void LCodeGen::DoPrologue(LPrologue* instr) {
   Comment(";;; Prologue end");
 }
 
-
-void LCodeGen::GenerateOsrPrologue() {
-  // Generate the OSR entry prologue at the first unknown OSR value, or if there
-  // are none, at the OSR entrypoint instruction.
-  if (osr_pc_offset_ >= 0) return;
-
-  osr_pc_offset_ = masm()->pc_offset();
-
-  // Interpreter is the first tier compiler now. It will run the code generated
-  // by TurboFan compiler which will always put "1" on x87 FPU stack.
-  // This behavior will affect crankshaft's x87 FPU stack depth check under
-  // debug mode.
-  // Need to reset the FPU stack here for this scenario.
-  __ fninit();
-
-  // Adjust the frame size, subsuming the unoptimized frame into the
-  // optimized frame.
-  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
-  DCHECK(slots >= 0);
-  __ sub(esp, Immediate(slots * kPointerSize));
-}
-
+void LCodeGen::GenerateOsrPrologue() { UNREACHABLE(); }
 
 void LCodeGen::GenerateBodyInstructionPre(LInstruction* instr) {
   if (instr->IsCall()) {
@@ -465,7 +443,6 @@ int LCodeGen::X87Stack::ArrayIndex(X87Register reg) {
     if (stack_[i].is(reg)) return i;
   }
   UNREACHABLE();
-  return -1;
 }
 
 
@@ -863,8 +840,7 @@ void LCodeGen::CallCodeGeneric(Handle<Code> code,
 
   // Signal that we don't inline smi code before these stubs in the
   // optimizing code generator.
-  if (code->kind() == Code::BINARY_OP_IC ||
-      code->kind() == Code::COMPARE_IC) {
+  if (code->kind() == Code::COMPARE_IC) {
     __ nop();
   }
 }
@@ -2046,8 +2022,7 @@ void LCodeGen::DoArithmeticT(LArithmeticT* instr) {
   DCHECK(ToRegister(instr->right()).is(eax));
   DCHECK(ToRegister(instr->result()).is(eax));
 
-  Handle<Code> code = CodeFactory::BinaryOpIC(isolate(), instr->op()).code();
-  CallCode(code, RelocInfo::CODE_TARGET, instr);
+  UNREACHABLE();
 }
 
 
@@ -2423,7 +2398,6 @@ static Condition ComputeCompareCondition(Token::Value op) {
       return greater_equal;
     default:
       UNREACHABLE();
-      return no_condition;
   }
 }
 
@@ -2456,7 +2430,6 @@ static Condition BranchCondition(HHasInstanceTypeAndBranch* instr) {
   if (to == LAST_TYPE) return above_equal;
   if (from == FIRST_TYPE) return below_equal;
   UNREACHABLE();
-  return equal;
 }
 
 
@@ -3022,17 +2995,13 @@ void LCodeGen::DoWrapReceiver(LWrapReceiver* instr) {
   Register scratch = ToRegister(instr->temp());
 
   if (!instr->hydrogen()->known_function()) {
-    // Do not transform the receiver to object for strict mode
-    // functions.
+    // Do not transform the receiver to object for strict mode functions or
+    // builtins.
     __ mov(scratch,
            FieldOperand(function, JSFunction::kSharedFunctionInfoOffset));
-    __ test_b(FieldOperand(scratch, SharedFunctionInfo::kStrictModeByteOffset),
-              Immediate(1 << SharedFunctionInfo::kStrictModeBitWithinByte));
-    __ j(not_equal, &receiver_ok, dist);
-
-    // Do not transform the receiver to object for builtins.
-    __ test_b(FieldOperand(scratch, SharedFunctionInfo::kNativeByteOffset),
-              Immediate(1 << SharedFunctionInfo::kNativeBitWithinByte));
+    __ test(FieldOperand(scratch, SharedFunctionInfo::kCompilerHintsOffset),
+            Immediate(SharedFunctionInfo::IsStrictBit::kMask |
+                      SharedFunctionInfo::IsNativeBit::kMask));
     __ j(not_equal, &receiver_ok, dist);
   }
 
@@ -3737,10 +3706,9 @@ void LCodeGen::DoCallNewArray(LCallNewArray* instr) {
   __ mov(ebx, instr->hydrogen()->site());
 
   ElementsKind kind = instr->hydrogen()->elements_kind();
-  AllocationSiteOverrideMode override_mode =
-      (AllocationSite::GetMode(kind) == TRACK_ALLOCATION_SITE)
-          ? DISABLE_ALLOCATION_SITES
-          : DONT_OVERRIDE;
+  AllocationSiteOverrideMode override_mode = AllocationSite::ShouldTrack(kind)
+                                                 ? DISABLE_ALLOCATION_SITES
+                                                 : DONT_OVERRIDE;
 
   if (instr->arity() == 0) {
     ArrayNoArgumentConstructorStub stub(isolate(), kind, override_mode);
@@ -5313,7 +5281,7 @@ void LCodeGen::DoTypeof(LTypeof* instr) {
   __ mov(eax, Immediate(isolate()->factory()->number_string()));
   __ jmp(&end);
   __ bind(&do_call);
-  Callable callable = CodeFactory::Typeof(isolate());
+  Callable callable = Builtins::CallableFor(isolate(), Builtins::kTypeof);
   CallCode(callable.code(), RelocInfo::CODE_TARGET, instr);
   __ bind(&end);
 }
@@ -5555,8 +5523,7 @@ void LCodeGen::DoForInCacheArray(LForInCacheArray* instr) {
 
   __ bind(&load_cache);
   __ LoadInstanceDescriptors(map, result);
-  __ mov(result,
-         FieldOperand(result, DescriptorArray::kEnumCacheOffset));
+  __ mov(result, FieldOperand(result, DescriptorArray::kEnumCacheBridgeOffset));
   __ mov(result,
          FieldOperand(result, FixedArray::SizeFor(instr->idx())));
   __ bind(&done);
